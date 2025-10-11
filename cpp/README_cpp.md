@@ -10,6 +10,8 @@ sudo apt-get install -y build-essential cmake pkg-config
 sudo apt-get install -y libosqp-dev
 # 安装 Eigen3（若未安装）
 sudo apt-get install -y libeigen3-dev
+# 安装 yaml-cpp（若未安装）
+sudo apt-get install -y libyaml-cpp-dev
 ```
 
 安装 OSQP-Eigen（两种方式之一）：

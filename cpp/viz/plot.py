@@ -114,7 +114,7 @@ def setup_animation_fig(xs, ys, ts, hmins, first_obs, ref_xs, ref_ys):
     return fig, ax_env, traj_line, robot_patch, yaw_arrow, obs_patches, vel_arrows, rel_arrows, ax_h, h_vline
 
 def main(save_mp4=False, mp4_path='output_anim.mp4'):
-    rows, fieldnames = read_csv('build/output_dpcbf.csv')
+    rows, fieldnames = read_csv('output_dpcbf.csv')
     if not rows:
         print("No data found in output_dpcbf.csv")
         return
@@ -180,4 +180,4 @@ def main(save_mp4=False, mp4_path='output_anim.mp4'):
         plt.show()
 
 if __name__ == '__main__':
-    main(save_mp4=True)
+    main(save_mp4=False)
