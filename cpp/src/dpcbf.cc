@@ -15,6 +15,8 @@ namespace {
     }
 } // namespace
 
+namespace dpcbf_qp {
+
 DPCBFResult dpcbf_continuous(double X, double Y, double theta, double v,
                                     const Obstacle& obs, double robot_radius,
                                     const DPCBFParams& p) {
@@ -49,3 +51,5 @@ std::array<double,2> dpcbf_discrete(double X, double Y, double theta, double v,
     auto h1 = dpcbf_continuous(X1, Y1, theta1, v1, obs, robot_radius, p).h;
     return {hk, h1 - hk};
 }
+
+} // namespace dpcbf_qp

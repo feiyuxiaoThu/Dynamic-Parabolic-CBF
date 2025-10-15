@@ -2,6 +2,8 @@
 #include <algorithm> // for std::max, std::min
 #include <cmath>     // for M_PI, atan2, cos, sin, tan
 
+namespace dpcbf_qp {
+
 BicycleModel::BicycleModel(double dt, const RobotSpec& spec): dt_(dt), spec_(spec) {}
 
 State BicycleModel::step(const State& s, const Control& u) const {
@@ -44,3 +46,5 @@ double BicycleModel::wrapAngle(double a) {
     while (a < -M_PI) a += 2*M_PI;
     return a;
 }
+
+} // namespace dpcbf_qp

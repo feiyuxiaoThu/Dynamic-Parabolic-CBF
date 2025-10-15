@@ -2,6 +2,8 @@
 #include <algorithm>
 #include <vector>
 
+namespace dpcbf_qp {
+
 QPController::QPController(const BicycleModel& model,
                            const DPCBFParams& dparams,
                            const QPWeights& w,
@@ -9,14 +11,15 @@ QPController::QPController(const BicycleModel& model,
     : model_(model), dparams_(dparams), w_(w), cfg_(cfg) {}
 
 Control QPController::solve(const State& s, const Control& u_ref,
-                  const std::vector<Obstacle>& obstacles,
-                  double ref_x, double ref_y, double theta_ref) const {
+                  const std::vector<Obstacle>& obstacles) const {
     using Eigen::MatrixXd;
     using Eigen::VectorXd;
 
     const int nv = 3;
 
-    const double w_px = 3.0, w_py = 3.0, w_th = 1.5;
+    // 简化权重：只保留控制输入跟踪权重
+    const double w_steer = 1.0;  // 转向角跟踪权重
+    const double w_accel = 1.0;  // 加速度跟踪权重
     const double h_thresh = 0.2;
     const int K = 3;
 
@@ -47,45 +50,35 @@ Control QPController::solve(const State& s, const Control& u_ref,
 
     MatrixXd H = MatrixXd::Zero(nv, nv);
     VectorXd f = VectorXd::Zero(nv);
+    
+    // 基本控制跟踪权重
     H(0,0) = w_.w_steer;
     H(1,1) = w_.w_a;
     H(2,2) = w_.rho;
+    
+    // 基本参考跟踪项
     VectorXd xref(nv);
     xref << u_ref.steer, u_ref.a, 0.0;
     f = -H * xref;
+    
+    // 添加jerk惩罚项（如果有上一时刻的控制输入）
+    if (has_previous_) {
+        // jerk = (u_current - u_previous) / dt
+        // 惩罚项: w_jerk * jerk^2 = w_jerk * (u_current - u_previous)^2 / dt^2
+        // 这里假设dt=1（或者将dt^2合并到权重中）
+        
+        // 转向角jerk惩罚: w_jerk_steer * (steer - steer_prev)^2
+        H(0,0) += w_.w_jerk_steer;
+        f(0) += -w_.w_jerk_steer * u_previous_.steer;
+        
+        // 加速度jerk惩罚: w_jerk_accel * (accel - accel_prev)^2  
+        H(1,1) += w_.w_jerk_accel;
+        f(1) += -w_.w_jerk_accel * u_previous_.a;
+    }
 
-    State s1_ref = model_.step(s, u_ref);
-    Control u_steer_ref = u_ref; u_steer_ref.steer += cfg_.du;
-    State s1_steer = model_.step(s, u_steer_ref);
-    Control u_a_ref = u_ref; u_a_ref.a += cfg_.du;
-    State s1_a = model_.step(s, u_a_ref);
-
-    Eigen::Vector2d Jx, Jy, Jth;
-    Jx  << (s1_steer.x  - s1_ref.x)/cfg_.du,  (s1_a.x  - s1_ref.x)/cfg_.du;
-    Jy  << (s1_steer.y  - s1_ref.y)/cfg_.du,  (s1_a.y  - s1_ref.y)/cfg_.du;
-    Jth << (s1_steer.theta - s1_ref.theta)/cfg_.du, (s1_a.theta - s1_ref.theta)/cfg_.du;
-
-    double e_th = BicycleModel::wrapAngle(s1_ref.theta - theta_ref);
-    Eigen::Vector3d e0;
-    e0 << (s1_ref.x - ref_x), (s1_ref.y - ref_y), e_th;
-
-    Eigen::Matrix<double,3,2> E;
-    E.row(0) = Jx.transpose();
-    E.row(1) = Jy.transpose();
-    E.row(2) = Jth.transpose();
-
-    Eigen::Matrix3d Wtrk = Eigen::Matrix3d::Zero();
-    Wtrk(0,0)=w_px; Wtrk(1,1)=w_py; Wtrk(2,2)=w_th;
-
-    Eigen::Matrix2d Haa = E.transpose() * Wtrk * E;
-    H(0,0) += Haa(0,0);
-    H(0,1) += Haa(0,1);
-    H(1,0) += Haa(1,0);
-    H(1,1) += Haa(1,1);
-
-    Eigen::Vector2d fa2 = E.transpose() * Wtrk * e0;
-    f(0) += fa2(0) - (Haa.row(0) * Eigen::Vector2d(u_ref.steer, u_ref.a))(0);
-    f(1) += fa2(1) - (Haa.row(1) * Eigen::Vector2d(u_ref.steer, u_ref.a))(0);
+    // 移除复杂的轨迹跟踪计算
+    // 现在只使用基于回归轨迹计算的 u_ref 作为控制参考
+    // 这样更符合实际情况：车辆因避障偏离轨迹后，应该跟踪回归轨迹的控制量
 
     MatrixXd A = MatrixXd::Zero(m_total, nv);
     VectorXd l = VectorXd::Constant(m_total, -OsqpEigen::INFTY);
@@ -153,5 +146,17 @@ Control QPController::solve(const State& s, const Control& u_ref,
     Control u;
     u.steer = BicycleModel::clamp(sol(0), steer_lo, steer_hi);
     u.a     = BicycleModel::clamp(sol(1), a_lo, a_hi);
+    
+    // 更新控制历史用于下一次jerk计算
+    u_previous_ = u;
+    has_previous_ = true;
+    
     return u;
 }
+
+void QPController::updatePreviousControl(const Control& u_prev) {
+    u_previous_ = u_prev;
+    has_previous_ = true;
+}
+
+} // namespace dpcbf_qp

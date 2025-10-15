@@ -6,15 +6,25 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(Eigen3 REQUIRED)
 find_package(OsqpEigen REQUIRED)
-find_package(yaml-cpp REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(GFLAGS REQUIRED gflags)
 
 include_directories(include)
 
-add_executable(dpcbf_sim
-    sim.cpp
+# 统一仿真器库
+add_library(unified_simulator
+    src/unified_simulator.cpp
     src/bicycle_model.cc
-    src/config_loader.cc
+    src/gflags_config.cc
     src/dpcbf.cc
     src/qp_controller.cc
 )
-target_link_libraries(dpcbf_sim PRIVATE Eigen3::Eigen OsqpEigen::OsqpEigen yaml-cpp::yaml-cpp)
+target_link_libraries(unified_simulator PUBLIC Eigen3::Eigen OsqpEigen::OsqpEigen ${GFLAGS_LIBRARIES})
+target_include_directories(unified_simulator PUBLIC ${GFLAGS_INCLUDE_DIRS})
+
+# 统一示例程序
+add_executable(unified_examples
+    unified_examples.cpp
+)
+target_link_libraries(unified_examples PRIVATE unified_simulator)
+

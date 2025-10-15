@@ -2,6 +2,8 @@
 #include <cmath>
 #include <array>
 
+namespace dpcbf_qp {
+
 struct Obstacle {
     double ox{0.0}, oy{0.0}, r{0.0}, vx{0.0}, vy{0.0};
 };
@@ -27,3 +29,5 @@ std::array<double,2> dpcbf_discrete(double X, double Y, double theta, double v,
                                             double X1, double Y1, double theta1, double v1,
                                             const Obstacle& obs, double robot_radius,
                                             const DPCBFParams& p);
+
+} // namespace dpcbf_qp

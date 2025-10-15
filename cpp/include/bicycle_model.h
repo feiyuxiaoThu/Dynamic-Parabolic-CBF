@@ -1,6 +1,8 @@
 #pragma once
 #include <cmath>
 
+namespace dpcbf_qp {
+
 struct State {
     double x{0.0}, y{0.0}, theta{0.0}, v{0.0};
 };
@@ -35,3 +37,5 @@ private:
     double dt_;
     RobotSpec spec_;
 };
+
+} // namespace dpcbf_qp
