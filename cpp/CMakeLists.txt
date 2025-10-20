@@ -28,3 +28,9 @@ add_executable(unified_examples
 )
 target_link_libraries(unified_examples PRIVATE unified_simulator)
 
+# Test for all obstacles functionality
+add_executable(test_all_obstacles
+    test_all_obstacles.cpp
+)
+target_link_libraries(test_all_obstacles PRIVATE unified_simulator)
+
