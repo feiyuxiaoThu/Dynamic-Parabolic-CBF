@@ -1,10 +1,27 @@
 #include "../include/unified_simulator.h"
+#include <chrono>
 
 namespace dpcbf_qp {
 
-UnifiedSimulator::UnifiedSimulator(const SimConfig& config) 
+UnifiedSimulator::UnifiedSimulator(const SimConfig& config)
     : config_(config), model_(config.dt, config.robot_spec),
       controller_(model_, config.dpcbf_params, config.qp_weights, config.discrete_cbf_config) {
+
+    // 初始化 Multiple-Shooting 控制器
+    MultipleShootingParams ms_params;
+    ms_params.horizon = 10;
+    ms_params.dt = config.dt;
+    ms_params.weight_control = config.qp_weights.w_steer;
+    ms_params.weight_rate = config.qp_weights.w_jerk_steer;
+    ms_params.max_obstacles = 3;
+
+    ms_controller_ = std::make_unique<MultipleShootingController>(
+        model_, config.dpcbf_params, ms_params);
+
+    // 初始化性能统计
+    controller_stats_[ControllerType::SINGLE_SHOOTING] = ControllerStats{};
+    controller_stats_[ControllerType::MULTIPLE_SHOOTING] = ControllerStats{};
+    controller_stats_[ControllerType::ADAPTIVE] = ControllerStats{};
 }
 
 void UnifiedSimulator::runSimulation(const std::vector<Waypoint>& waypoints, 
@@ -84,10 +101,25 @@ void UnifiedSimulator::runSimulation(const std::vector<Waypoint>& waypoints,
         u_ref.steer = u_future.steer;
         u_ref.a = u_future.a;
         
-        // 更新QP控制器的上一时刻控制输入（用于jerk惩罚）
-        controller_.updatePreviousControl(u_prev);
-        
-        Control u_raw = controller_.solve(s, u_ref, sim_obstacles);
+        // 选择控制器类型
+        ControllerType selected_controller = scenario_params.controller_type;
+        if (selected_controller == ControllerType::ADAPTIVE) {
+            selected_controller = selectControllerType(s, sim_obstacles, t);
+        }
+
+        // 根据选择的控制器求解
+        Control u_raw;
+        switch (selected_controller) {
+            case ControllerType::MULTIPLE_SHOOTING:
+                u_raw = solveWithMultipleShooting(s, u_ref, sim_obstacles, scenario_params);
+                break;
+            case ControllerType::SINGLE_SHOOTING:
+            default:
+                // 更新QP控制器的上一时刻控制输入（用于jerk惩罚）
+                controller_.updatePreviousControl(u_prev);
+                u_raw = solveWithSingleShooting(s, u_ref, sim_obstacles);
+                break;
+        }
         
         // 应用控制限制
         double steer_cmd = BicycleModel::clamp(
@@ -425,4 +457,126 @@ void UnifiedSimulator::writeCSVRow(std::ofstream& ofs, double t, const State& st
     }
     ofs << "\n";
 }
+
+// 新增的方法实现
+std::vector<double> UnifiedSimulator::getControllerStatistics() const {
+    std::vector<double> stats;
+
+    for (const auto& pair : controller_stats_) {
+        const auto& controller_stats = pair.second;
+        if (controller_stats.usage_count > 0) {
+            stats.push_back(static_cast<double>(pair.first));           // 控制器类型
+            stats.push_back(static_cast<double>(controller_stats.usage_count));   // 使用次数
+            stats.push_back(controller_stats.total_solve_time);                    // 总求解时间
+            stats.push_back(controller_stats.total_solve_time / controller_stats.usage_count); // 平均求解时间
+            stats.push_back(static_cast<double>(controller_stats.success_count));         // 成功次数
+            stats.push_back(static_cast<double>(controller_stats.success_count) / controller_stats.usage_count); // 成功率
+            stats.push_back(controller_stats.max_solve_time);                         // 最大求解时间
+            stats.push_back(controller_stats.min_solve_time);                         // 最小求解时间
+        }
+    }
+
+    return stats;
+}
+
+ControllerType UnifiedSimulator::selectControllerType(const State& state,
+                                                     const std::vector<Obstacle>& obstacles,
+                                                     double current_time) {
+    // 计算环境复杂度
+    double complexity = 0.0;
+
+    // 障碍物密度和距离因子
+    for (const auto& obs : obstacles) {
+        double dist = std::sqrt(std::pow(state.x - obs.ox, 2) + std::pow(state.y - obs.oy, 2)) - obs.r;
+        double rel_speed = std::sqrt(std::pow(obs.vx, 2) + std::pow(obs.vy, 2));
+
+        if (dist < 5.0) {  // 5米内的障碍物
+            complexity += 2.0 * (5.0 - std::max(0.0, dist)) / 5.0;
+        }
+
+        complexity += 0.5 * rel_speed / 10.0;  // 相对速度因子
+    }
+
+    // 基于历史性能选择
+    double ss_avg_time = controller_stats_.at(ControllerType::SINGLE_SHOOTING).usage_count > 0 ?
+                        controller_stats_.at(ControllerType::SINGLE_SHOOTING).total_solve_time /
+                        controller_stats_.at(ControllerType::SINGLE_SHOOTING).usage_count : 0.0;
+
+    double ms_avg_time = controller_stats_.at(ControllerType::MULTIPLE_SHOOTING).usage_count > 0 ?
+                        controller_stats_.at(ControllerType::MULTIPLE_SHOOTING).total_solve_time /
+                        controller_stats_.at(ControllerType::MULTIPLE_SHOOTING).usage_count : 0.0;
+
+    // 自适应选择逻辑
+    if (complexity > complexity_threshold_) {
+        // 高复杂度环境，优先使用 Multiple-Shooting
+        if (ms_avg_time < time_budget_ || ss_avg_time > time_budget_) {
+            return ControllerType::MULTIPLE_SHOOTING;
+        }
+    }
+
+    // 默认使用 Single-Shooting
+    return ControllerType::SINGLE_SHOOTING;
+}
+
+Control UnifiedSimulator::solveWithSingleShooting(const State& state,
+                                                  const Control& u_ref,
+                                                  const std::vector<Obstacle>& obstacles) {
+    auto start_time = std::chrono::high_resolution_clock::now();
+
+    Control result = controller_.solve(state, u_ref, obstacles);
+
+    auto end_time = std::chrono::high_resolution_clock::now();
+    double solve_time = std::chrono::duration<double>(end_time - start_time).count();
+
+    updatePerformanceStatistics(ControllerType::SINGLE_SHOOTING, solve_time, true);
+
+    return result;
+}
+
+Control UnifiedSimulator::solveWithMultipleShooting(const State& state,
+                                                    const Control& u_ref,
+                                                    const std::vector<Obstacle>& obstacles,
+                                                    const ScenarioParams& scenario_params) {
+    auto start_time = std::chrono::high_resolution_clock::now();
+
+    // 更新 Multiple-Shooting 参数
+    MultipleShootingParams ms_params;
+    ms_params.horizon = scenario_params.ms_horizon;
+    ms_params.dt = scenario_params.ms_dt;
+    ms_params.weight_control = scenario_params.ms_weight_control;
+    ms_params.weight_rate = scenario_params.ms_weight_rate;
+    ms_params.max_obstacles = scenario_params.ms_max_obstacles;
+
+    ms_controller_->updateParams(ms_params);
+
+    // 求解 Multiple-Shooting 问题
+    auto ms_result = ms_controller_->solve(state, u_ref, obstacles);
+
+    auto end_time = std::chrono::high_resolution_clock::now();
+    double solve_time = std::chrono::duration<double>(end_time - start_time).count();
+
+    updatePerformanceStatistics(ControllerType::MULTIPLE_SHOOTING, solve_time, ms_result.success);
+
+    if (ms_result.success && !ms_result.control_sequence.empty()) {
+        return ms_result.control_sequence[0];  // 返回第一个控制输入
+    } else {
+        // 回退到 Single-Shooting
+        std::cout << "Multiple-Shooting 失败，回退到 Single-Shooting" << std::endl;
+        return solveWithSingleShooting(state, u_ref, obstacles);
+    }
+}
+
+void UnifiedSimulator::updatePerformanceStatistics(ControllerType type, double solve_time, bool success) {
+    auto& stats = controller_stats_[type];
+
+    stats.usage_count++;
+    stats.total_solve_time += solve_time;
+    stats.max_solve_time = std::max(stats.max_solve_time, solve_time);
+    stats.min_solve_time = std::min(stats.min_solve_time, solve_time);
+
+    if (success) {
+        stats.success_count++;
+    }
+}
+
 } // namespace dpcbf_qp

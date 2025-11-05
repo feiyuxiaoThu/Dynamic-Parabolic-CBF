@@ -18,6 +18,8 @@ add_library(unified_simulator
     src/gflags_config.cc
     src/dpcbf.cc
     src/qp_controller.cc
+    src/multiple_shooting_controller.cpp
+    src/advanced_qp_solver.cpp
 )
 target_link_libraries(unified_simulator PUBLIC Eigen3::Eigen OsqpEigen::OsqpEigen ${GFLAGS_LIBRARIES})
 target_include_directories(unified_simulator PUBLIC ${GFLAGS_INCLUDE_DIRS})
@@ -33,4 +35,16 @@ add_executable(test_all_obstacles
     test_all_obstacles.cpp
 )
 target_link_libraries(test_all_obstacles PRIVATE unified_simulator)
+
+# Multiple-Shooting 测试程序
+add_executable(test_multiple_shooting
+    test_multiple_shooting.cpp
+)
+target_link_libraries(test_multiple_shooting PRIVATE unified_simulator)
+
+# 控制器性能基准测试
+add_executable(benchmark_controllers
+    benchmark_controllers.cpp
+)
+target_link_libraries(benchmark_controllers PRIVATE unified_simulator)
 
